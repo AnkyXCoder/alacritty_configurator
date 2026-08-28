@@ -13,9 +13,11 @@ UI_RECOMMENDED_INDEX=""
 # to keep the cursor on the last selected step.
 UI_START_INDEX=""
 
-# When set, ui_footer hides the [b] back and/or [r] restart keys.
+# When set, ui_footer hides the [b] back and/or [r] restart keys and/or
+# the numeric quick-select range.
 UI_FOOTER_NO_BACK=""
 UI_FOOTER_NO_RESTART=""
+UI_NO_QUICK_SELECT=""
 
 # --- low level terminal helpers ------------------------------------------
 
@@ -74,7 +76,9 @@ ui_footer() {
 	printf '\n'
 	ui_rule
 	if [[ -n "$n" ]]; then
-		if ((n <= 9)); then
+		if [[ -n "$UI_NO_QUICK_SELECT" ]]; then
+			printf '[j/k or up/down] move   [Enter] confirm   %s%s[q] quit\n' "$back" "$restart"
+		elif ((n <= 9)); then
 			printf '[1-%s] select   [j/k or up/down] move   [Enter] confirm   %s%s[q] quit\n' "$n" "$back" "$restart"
 		else
 			printf '[1-9] quick-select   [j/k or up/down] move   [Enter] confirm   %s%s[q] quit\n' "$back" "$restart"
@@ -204,12 +208,12 @@ ask_choice() {
 			return 0
 			;;
 		[0-9])
-			if ((key >= 1 && key <= n)); then
+			if [[ -z "$UI_NO_QUICK_SELECT" ]] && ((key >= 1 && key <= n)); then
 				idx=$((key - 1))
 				_result="${values[$idx]}"
 				return 0
 			fi
-			# Invalid digit falls through and just redraws.
+			# Invalid or disabled digit falls through and just redraws.
 			;;
 		b)
 			return 2

@@ -669,15 +669,48 @@ STEP_FUNCS=(
 	step_keybindings step_hints
 )
 
+# main_menu <result_var> -- interactive re-config menu. Shows the current
+# value for each section and does not offer numeric quick-select.
 main_menu() {
 	UI_FOOTER_NO_RESTART=""
+	UI_NO_QUICK_SELECT=1
 
 	ui_header "Main menu" "Select a section to configure"
 
-	local -a labels=("${STEP_LABELS[@]}")
+	local -a labels=()
 	local -a values=()
-	local i
+	local i value label
 	for ((i = 0; i < ${#STEP_LABELS[@]}; i++)); do
+		label="${STEP_LABELS[$i]}"
+		value=""
+		case "$i" in
+		0)  value="${CFG[font.normal.family]:-}" ;;
+		1)  value="${CFG[font.size]:-}" ;;
+		2)  value="${CFG[font.builtin_box_drawing]:-}" ;;
+		3)  value="${SELECTED_THEME:-}" ;;
+		4)  value="${CFG[colors.draw_bold_text_with_bright_colors]:-}" ;;
+		5)  value="${CFG[window.opacity]:-}" ;;
+		6)
+			if emit_has window.padding.x; then
+				value="$(emit_cfg_get window.padding.x "")x$(emit_cfg_get window.padding.y "")"
+			fi
+			;;
+		7)  value="${CFG[window.decorations]:-}" ;;
+		8)  value="${CFG[window.startup_mode]:-}" ;;
+		9)  value="${CFG[cursor.style.shape]:-}" ;;
+		10) value="${CFG[scrolling.history]:-}" ;;
+		11) value="${CFG[terminal.shell.program]:-}" ;;
+		13) value="${CFG[bell.animation]:-}" ;;
+		14) value="${KEYBIND_PRESET:-}" ;;
+		15) value="${HINTS_ENABLED:-}" ;;
+		esac
+		if [[ -n "$value" ]]; then
+			# Strip surrounding TOML quotes for a clean display.
+			value="${value#\"}"
+			value="${value%\"}"
+			label="$label: $value"
+		fi
+		labels+=("$label")
 		values+=("$i")
 	done
 
@@ -685,48 +718,49 @@ main_menu() {
 	ask_choice result - "${labels[@]}" -- "${values[@]}"
 	local rc=$?
 	printf -v "$1" "%s" "$result"
+	UI_NO_QUICK_SELECT=""
 	UI_FOOTER_NO_RESTART=1
 	return "$rc"
 }
 
 # --- main --------------------------------------------------------------------
 
-main() {
-	probe_alacritty
-	probe_env
-	probe_shells
-	[[ "$NO_PREVIEW" -eq 0 ]] && probe_live || LIVE=0
-	probe_existing_config
-	local skip_preflight=0
-	if [[ -n "$EXISTING_CONFIG_PATH" ]]; then
-		ui_warn "Existing configuration found at $EXISTING_CONFIG_PATH; it will be backed up before any overwrite."
-		local ans="" rc
-		while true; do
-			UI_FOOTER_NO_BACK=1
-			UI_FOOTER_NO_RESTART=1
-			ask_yn ans "Load existing configuration? (n = start from scratch)" "y"
-			rc=$?
-			UI_FOOTER_NO_BACK=""
-			UI_FOOTER_NO_RESTART=""
-			[[ "$rc" -eq 4 ]] && exit 0
-			[[ "$rc" -eq 0 ]] && break
-		done
-		if [[ "$ans" == "y" ]]; then
-			emit_load_config "$EXISTING_CONFIG_PATH"
-			skip_preflight=1
-		fi
-	fi
-	if [[ "$skip_preflight" -eq 1 ]]; then
-		UNICODE_OK="y"
-		NERDFONT_OK="n"
-	else
-		probe_unicode
-		probe_nerdfont
-	fi
-	probe_fonts
+# linear_wizard -- first-run flow: walk through every step in order.
+linear_wizard() {
+	local -a steps=("${STEP_FUNCS[@]}")
+	local idx=0
+	local n="${#steps[@]}"
+	while ((idx < n)); do
+		"${steps[$idx]}"
+		local rc=$?
+		case "$rc" in
+		0) idx=$((idx + 1)) ;;
+		2) idx=$((idx > 0 ? idx - 1 : 0)) ;;
+		3)
+			idx=0
+			CFG=()
+			SELECTED_THEME=""
+			SELECTED_THEME_TOML=""
+			SELECTED_THEME_FILE=""
+			KEYBIND_PRESET="minimal"
+			HINTS_ENABLED="n"
+			;;
+		4)
+			if ! emit_cfg_unchanged; then
+				local ans=""
+				ask_yn ans "You have unsaved changes. Save before exiting?" "y"
+				[[ "$ans" == "y" ]] && review_and_write
+			fi
+			exit 0
+			;;
+		esac
+	done
 
-	ui_init
+	review_and_write
+}
 
+# reconfig_menu -- interactive re-config flow: jump to any step from a menu.
+reconfig_menu() {
 	local choice
 	local main_menu_idx=0
 	while true; do
@@ -766,6 +800,51 @@ main() {
 		main_menu_idx="$choice"
 		"${STEP_FUNCS[$choice]}"
 	done
+}
+
+main() {
+	probe_alacritty
+	probe_env
+	probe_shells
+	[[ "$NO_PREVIEW" -eq 0 ]] && probe_live || LIVE=0
+	probe_existing_config
+	local skip_preflight=0
+	local reconfig=0
+	if [[ -n "$EXISTING_CONFIG_PATH" ]]; then
+		ui_warn "Existing configuration found at $EXISTING_CONFIG_PATH; it will be backed up before any overwrite."
+		local ans="" rc
+		while true; do
+			UI_FOOTER_NO_BACK=1
+			UI_FOOTER_NO_RESTART=1
+			ask_yn ans "Load existing configuration? (n = start from scratch)" "y"
+			rc=$?
+			UI_FOOTER_NO_BACK=""
+			UI_FOOTER_NO_RESTART=""
+			[[ "$rc" -eq 4 ]] && exit 0
+			[[ "$rc" -eq 0 ]] && break
+		done
+		if [[ "$ans" == "y" ]]; then
+			emit_load_config "$EXISTING_CONFIG_PATH"
+			skip_preflight=1
+			reconfig=1
+		fi
+	fi
+	if [[ "$skip_preflight" -eq 1 ]]; then
+		UNICODE_OK="y"
+		NERDFONT_OK="n"
+	else
+		probe_unicode
+		probe_nerdfont
+	fi
+	probe_fonts
+
+	ui_init
+
+	if [[ "$reconfig" -eq 1 ]]; then
+		reconfig_menu
+	else
+		linear_wizard
+	fi
 }
 
 main "$@"
