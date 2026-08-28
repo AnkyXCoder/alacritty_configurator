@@ -650,7 +650,6 @@ STEP_LABELS=(
 	"Color theme"
 	"Bold text coloring"
 	"Background opacity"
-	"Background blur"
 	"Window padding"
 	"Window decorations"
 	"Startup mode"
@@ -665,7 +664,7 @@ STEP_LABELS=(
 
 STEP_FUNCS=(
 	step_font_family step_font_size step_box_drawing step_theme step_bold_bright
-	step_opacity step_blur step_padding step_decorations step_startup
+	step_opacity step_padding step_decorations step_startup
 	step_cursor step_scrolling step_shell step_behavior step_bell
 	step_keybindings step_hints
 )
@@ -675,13 +674,12 @@ main_menu() {
 
 	ui_header "Main menu" "Select a section to configure"
 
-	local -a labels=("${STEP_LABELS[@]}" "Review & write configuration")
+	local -a labels=("${STEP_LABELS[@]}")
 	local -a values=()
 	local i
 	for ((i = 0; i < ${#STEP_LABELS[@]}; i++)); do
 		values+=("$i")
 	done
-	values+=("write")
 
 	local result=""
 	ask_choice result - "${labels[@]}" -- "${values[@]}"
@@ -714,7 +712,10 @@ main() {
 	ui_init
 
 	local choice
+	local main_menu_idx=0
 	while true; do
+		UI_RECOMMENDED_INDEX=""
+		UI_START_INDEX="$main_menu_idx"
 		main_menu choice
 		local rc=$?
 
@@ -728,8 +729,14 @@ main() {
 			exit 0
 		fi
 
+		# b from the main menu just redraws at the same cursor position.
+		if [[ "$rc" -eq 2 ]]; then
+			continue
+		fi
+
 		# r = restart from main menu: reset to the original config and redraw.
 		if [[ "$rc" -eq 3 ]]; then
+			main_menu_idx=0
 			CFG=()
 			SELECTED_THEME=""
 			SELECTED_THEME_TOML=""
@@ -740,15 +747,8 @@ main() {
 			continue
 		fi
 
-		case "$choice" in
-		write)
-			review_and_write
-			exit 0
-			;;
-		*)
-			"${STEP_FUNCS[$choice]}"
-			;;
-		esac
+		main_menu_idx="$choice"
+		"${STEP_FUNCS[$choice]}"
 	done
 }
 

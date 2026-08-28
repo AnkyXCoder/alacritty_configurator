@@ -6,8 +6,12 @@
 # are unavailable (e.g. when driven non-interactively for testing).
 
 # Optional global set by callers before ask_choice to mark a recommended
-# option (0-based index) and make it the initial highlight.
+# option (0-based index) with the (recommended) suffix.
 UI_RECOMMENDED_INDEX=""
+
+# Optional global initial highlight index (no marker). Used by the main menu
+# to keep the cursor on the last selected step.
+UI_START_INDEX=""
 
 # When set, ui_footer hides the [r] restart key (used inside re-config steps
 # where the main menu already provides navigation/restart).
@@ -144,12 +148,16 @@ ask_choice() {
 	local -a values=("$@")
 
 	local n="${#labels[@]}"
-	# Consume and clear the global recommendation index so it does not
-	# leak into later menus. Empty means "no recommendation".
+	# Consume and clear the global start / recommendation indexes so they do
+	# not leak into later menus. Empty means "no special start / marker".
 	local rec="${UI_RECOMMENDED_INDEX-}"
 	UI_RECOMMENDED_INDEX=""
+	local start="${UI_START_INDEX-}"
+	UI_START_INDEX=""
 	local idx=0
-	if [[ -n "$rec" ]] && ((rec >= 0 && rec < n)); then
+	if [[ -n "$start" ]] && ((start >= 0 && start < n)); then
+		idx="$start"
+	elif [[ -n "$rec" ]] && ((rec >= 0 && rec < n)); then
 		idx="$rec"
 	fi
 	local key
