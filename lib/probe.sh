@@ -77,6 +77,8 @@ probe_unicode() {
 	printf '\n  %s\n  %s\n\n' "╭──────╮ ▁▂▃▄▅▆▇█ ░▒▓" "╰──────╯"
 	local ans
 	ask_yn ans "Did that render correctly (no boxes/question marks)?" "y"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && exit "$rc"
 	UNICODE_OK="$ans"
 }
 
@@ -96,6 +98,8 @@ probe_nerdfont() {
 	fi
 	local ans
 	ask_yn ans "Did those render as solid triangles/icons (not boxes)?" "n"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && exit "$rc"
 	NERDFONT_OK="$ans"
 	NERDFONT_INSTALLED_COUNT="$fc_hits"
 }

@@ -117,7 +117,7 @@ step_font_family() {
 		live_apply "font.normal.family" "${values[$idx]}"
 	}
 
-	local result
+	local result=""
 	UI_RECOMMENDED_INDEX=0
 	ask_choice result preview_family "${labels[@]}" -- "${values[@]}"
 	local rc=$?
@@ -145,7 +145,7 @@ step_font_size() {
 	local current="${CFG[font.size]:-13.0}"
 	current="${current%.0}"
 
-	local result
+	local result=""
 	ask_number result preview_size "Font size" 8 24 0.5 "$current"
 	local rc=$?
 	[[ "$rc" -ne 0 ]] && return "$rc"
@@ -193,7 +193,7 @@ step_theme() {
 		theme_preview "${values[$idx]}"
 	}
 
-	local result
+	local result=""
 	ask_choice result preview_theme "${labels[@]}" -- "${values[@]}"
 	local rc=$?
 	[[ "$rc" -ne 0 ]] && return "$rc"
@@ -245,7 +245,7 @@ step_opacity() {
 		live_apply "window.opacity" "${values[$1]}"
 	}
 
-	local result
+	local result=""
 	UI_RECOMMENDED_INDEX=0
 	ask_choice result preview_opacity "${labels[@]}" -- "${values[@]}"
 	local rc=$?
@@ -281,7 +281,7 @@ step_padding() {
 		live_apply "window.padding" "{ x = ${values[$1]}, y = ${values[$1]} }"
 	}
 
-	local result
+	local result=""
 	UI_RECOMMENDED_INDEX=1
 	ask_choice result preview_padding "${labels[@]}" -- "${values[@]}"
 	local rc=$?
@@ -303,7 +303,7 @@ step_decorations() {
 	local -a labels=("Full (borders + title bar)" "None (borderless)" "Transparent title bar" "Buttonless title bar")
 	local -a values=('"Full"' '"None"' '"Transparent"' '"Buttonless"')
 
-	local result
+	local result=""
 	UI_RECOMMENDED_INDEX=0
 	ask_choice result - "${labels[@]}" -- "${values[@]}"
 	local rc=$?
@@ -327,7 +327,7 @@ step_startup() {
 	local -a labels=("Windowed" "Maximized" "Fullscreen")
 	local -a values=('"Windowed"' '"Maximized"' '"Fullscreen"')
 
-	local result
+	local result=""
 	UI_RECOMMENDED_INDEX=0
 	ask_choice result - "${labels[@]}" -- "${values[@]}"
 	local rc=$?
@@ -353,7 +353,7 @@ step_cursor() {
 		printf '\n'
 	}
 
-	local result
+	local result=""
 	UI_RECOMMENDED_INDEX=0
 	ask_choice result preview_cursor "${labels[@]}" -- "${values[@]}"
 	local rc=$?
@@ -381,7 +381,7 @@ step_scrolling() {
 	local -a labels=("10,000 lines" "50,000 lines" "100,000 lines" "Unlimited (0)")
 	local -a values=("10000" "50000" "100000" "0")
 
-	local result
+	local result=""
 	UI_RECOMMENDED_INDEX=0
 	ask_choice result - "${labels[@]}" -- "${values[@]}"
 	local rc=$?
@@ -402,7 +402,7 @@ step_shell() {
 		values+=("$s")
 	done
 
-	local result
+	local result=""
 	UI_RECOMMENDED_INDEX=0
 	ask_choice result - "${labels[@]}" -- "${values[@]}"
 	local rc=$?
@@ -479,7 +479,7 @@ step_bell() {
 		esac
 	}
 
-	local result
+	local result=""
 	UI_RECOMMENDED_INDEX=1
 	ask_choice result preview_bell "${labels[@]}" -- "${values[@]}"
 	local rc=$?
@@ -519,7 +519,7 @@ step_keybindings() {
 	)
 	local -a values=("minimal" "standard" "standard_shell")
 
-	local result
+	local result=""
 	UI_RECOMMENDED_INDEX=1
 	ask_choice result - "${labels[@]}" -- "${values[@]}"
 	local rc=$?
@@ -636,6 +636,53 @@ review_and_write() {
 	return 0
 }
 
+# --- main menu --------------------------------------------------------------
+
+STEP_LABELS=(
+	"Font family"
+	"Font size"
+	"Box drawing"
+	"Color theme"
+	"Bold text coloring"
+	"Background opacity"
+	"Background blur"
+	"Window padding"
+	"Window decorations"
+	"Startup mode"
+	"Cursor style"
+	"Scrollback history"
+	"Default shell"
+	"Behavior"
+	"Terminal bell"
+	"Keybindings"
+	"Hints (URL open)"
+)
+
+STEP_FUNCS=(
+	step_font_family step_font_size step_box_drawing step_theme step_bold_bright
+	step_opacity step_blur step_padding step_decorations step_startup
+	step_cursor step_scrolling step_shell step_behavior step_bell
+	step_keybindings step_hints
+)
+
+main_menu() {
+	ui_header "Main menu" "Select a section to configure"
+
+	local -a labels=("${STEP_LABELS[@]}" "Review & write configuration" "Quit")
+	local -a values=()
+	local i
+	for ((i = 0; i < ${#STEP_LABELS[@]}; i++)); do
+		values+=("$i")
+	done
+	values+=("write" "quit")
+
+	local result=""
+	ask_choice result - "${labels[@]}" -- "${values[@]}"
+	local rc=$?
+	printf -v "$1" "%s" "$result"
+	return "$rc"
+}
+
 # --- main --------------------------------------------------------------------
 
 main() {
@@ -653,39 +700,53 @@ main() {
 
 	ui_init
 
-	local -a steps=(
-		step_font_family step_font_size step_box_drawing step_theme step_bold_bright
-		step_opacity step_blur step_padding step_decorations step_startup
-		step_cursor step_scrolling step_shell step_behavior step_bell
-		step_keybindings step_hints
-	)
-	local idx=0
-	local n="${#steps[@]}"
-
-	while ((idx < n)); do
-		"${steps[$idx]}"
+	local dirty=0
+	local choice
+	local step_rc
+	while true; do
+		main_menu choice
 		local rc=$?
-		case "$rc" in
-		0) idx=$((idx + 1)) ;;
-		2) idx=$((idx > 0 ? idx - 1 : 0)) ;;
-		3)
-			idx=0
+
+		# Treat q/ESC from the main menu as a quit request.
+		if [[ "$rc" -eq 4 ]]; then
+			choice="quit"
+			rc=0
+		fi
+
+		# r = restart from main menu: reset everything and redraw.
+		if [[ "$rc" -eq 3 ]]; then
 			CFG=()
 			SELECTED_THEME=""
 			SELECTED_THEME_TOML=""
 			SELECTED_THEME_FILE=""
 			KEYBIND_PRESET="minimal"
 			HINTS_ENABLED="n"
+			dirty=0
+			continue
+		fi
+
+		case "$choice" in
+		write)
+			review_and_write
+			exit 0
 			;;
-		4)
-			if ui_confirm_quit; then
-				exit 0
+		quit)
+			if [[ "$dirty" -eq 1 ]]; then
+				local ans=""
+				ask_yn ans "You have unsaved changes. Save before exiting?" "y"
+				[[ "$ans" == "y" ]] && review_and_write
+			fi
+			exit 0
+			;;
+		*)
+			"${STEP_FUNCS[$choice]}"
+			step_rc=$?
+			if [[ "$step_rc" -eq 0 ]]; then
+				dirty=1
 			fi
 			;;
 		esac
 	done
-
-	review_and_write
 }
 
 main "$@"
