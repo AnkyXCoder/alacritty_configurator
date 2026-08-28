@@ -698,7 +698,11 @@ main() {
 	probe_existing_config
 	if [[ -n "$EXISTING_CONFIG_PATH" ]]; then
 		ui_warn "Existing configuration found at $EXISTING_CONFIG_PATH; it will be backed up before any overwrite."
-		emit_load_config "$EXISTING_CONFIG_PATH"
+		local ans=""
+		ask_yn ans "Load existing configuration? (n = start from scratch)" "y"
+		local rc=$?
+		[[ "$rc" -eq 4 ]] && exit 0
+		[[ "$ans" == "y" ]] && emit_load_config "$EXISTING_CONFIG_PATH"
 	fi
 	probe_unicode
 	probe_nerdfont
