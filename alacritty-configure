@@ -570,6 +570,11 @@ install_nerd_font() {
 # --- review & write ----------------------------------------------------------
 
 review_and_write() {
+	if emit_cfg_unchanged; then
+		ui_info "No changes to save."
+		return 0
+	fi
+
 	ui_header "Review" "Confirm before writing"
 
 	printf '  Output directory:   %s\n' "$OUTPUT_DIR"
@@ -611,7 +616,7 @@ review_and_write() {
 		return 0
 	fi
 
-	local ans
+	local ans=""
 	ask_yn ans "Write this configuration?" "y"
 	if [[ "$ans" != "y" ]]; then
 		ui_info "Aborted; nothing was written."
@@ -693,6 +698,7 @@ main() {
 	probe_existing_config
 	if [[ -n "$EXISTING_CONFIG_PATH" ]]; then
 		ui_warn "Existing configuration found at $EXISTING_CONFIG_PATH; it will be backed up before any overwrite."
+		emit_load_config "$EXISTING_CONFIG_PATH"
 	fi
 	probe_unicode
 	probe_nerdfont
@@ -700,16 +706,14 @@ main() {
 
 	ui_init
 
-	local dirty=0
 	local choice
-	local step_rc
 	while true; do
 		main_menu choice
 		local rc=$?
 
 		# q/ESC from the main menu: ask to save and exit.
 		if [[ "$rc" -eq 4 ]]; then
-			if [[ "$dirty" -eq 1 ]]; then
+			if ! emit_cfg_unchanged; then
 				local ans=""
 				ask_yn ans "You have unsaved changes. Save before exiting?" "y"
 				[[ "$ans" == "y" ]] && review_and_write
@@ -717,7 +721,7 @@ main() {
 			exit 0
 		fi
 
-		# r = restart from main menu: reset everything and redraw.
+		# r = restart from main menu: reset to the original config and redraw.
 		if [[ "$rc" -eq 3 ]]; then
 			CFG=()
 			SELECTED_THEME=""
@@ -725,7 +729,7 @@ main() {
 			SELECTED_THEME_FILE=""
 			KEYBIND_PRESET="minimal"
 			HINTS_ENABLED="n"
-			dirty=0
+			emit_load_config "$EXISTING_CONFIG_PATH"
 			continue
 		fi
 
@@ -736,10 +740,6 @@ main() {
 			;;
 		*)
 			"${STEP_FUNCS[$choice]}"
-			step_rc=$?
-			if [[ "$step_rc" -eq 0 ]]; then
-				dirty=1
-			fi
 			;;
 		esac
 	done
