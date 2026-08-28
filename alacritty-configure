@@ -1,0 +1,662 @@
+#!/bin/bash
+# tools/alacritty/alacritty-configure
+#
+# A p10k-style, question-driven wizard to configure Alacritty. See
+# tools/alacritty/README.md for usage.
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/ui.sh
+source "$SCRIPT_DIR/lib/ui.sh"
+# shellcheck source=lib/probe.sh
+source "$SCRIPT_DIR/lib/probe.sh"
+# shellcheck source=lib/themes.sh
+source "$SCRIPT_DIR/lib/themes.sh"
+# shellcheck source=lib/emit.sh
+source "$SCRIPT_DIR/lib/emit.sh"
+
+# --- flags -----------------------------------------------------------------
+
+DRY_RUN=0
+NO_PREVIEW=0
+LOAD_EXISTING=0
+OUTPUT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/alacritty"
+
+print_help() {
+	cat <<EOF
+Usage: alacritty-configure [OPTIONS]
+
+Interactively configure Alacritty, with live in-window previews when run
+inside Alacritty itself.
+
+Options:
+  --dry-run            Print the resulting configuration to stdout; write nothing.
+  --output-dir DIR      Write the config tree to DIR instead of \$XDG_CONFIG_HOME/alacritty.
+  --no-preview          Disable live/mock previews (faster, non-interactive-friendly).
+  --load-existing        Attempt to seed defaults from the existing config, if any.
+  -h, --help             Show this help.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--dry-run) DRY_RUN=1 ;;
+	--output-dir)
+		OUTPUT_DIR="$2"
+		shift
+		;;
+	--no-preview) NO_PREVIEW=1 ;;
+	--load-existing) LOAD_EXISTING=1 ;;
+	-h | --help)
+		print_help
+		exit 0
+		;;
+	*)
+		echo "Unknown option: $1" >&2
+		print_help
+		exit 1
+		;;
+	esac
+	shift
+done
+
+# --- live preview plumbing --------------------------------------------------
+
+# live_apply <toml-key> <toml-value-literal>
+live_apply() {
+	[[ "$NO_PREVIEW" -eq 1 || "${LIVE:-0}" -ne 1 ]] && return 0
+	"$ALACRITTY_BIN" msg config -w -1 "${1}=${2}" >/dev/null 2>&1
+}
+
+live_reset() {
+	[[ "$NO_PREVIEW" -eq 1 || "${LIVE:-0}" -ne 1 ]] && return 0
+	emit_reset_preview
+}
+
+on_exit() {
+	ui_cleanup
+	live_reset
+}
+trap on_exit EXIT
+
+# --- step state --------------------------------------------------------------
+
+declare -A CFG # reused from emit.sh, populated here
+SELECTED_THEME=""
+SELECTED_THEME_TOML=""
+SELECTED_THEME_FILE=""
+KEYBIND_PRESET="minimal"
+HINTS_ENABLED="n"
+
+# Result codes: 0 = advance, 2 = back, 3 = restart, 4 = quit
+
+step_font_family() {
+	ui_header "Step 1/17" "Font family"
+
+	if [[ "${#FONT_FAMILIES[@]}" -le 1 && "$NERDFONT_OK" != "y" ]]; then
+		ui_warn "No Nerd Fonts are installed, so icon/powerline glyphs in prompts will not render."
+		local ans
+		ask_yn ans "Download a Nerd Font now (JetBrainsMono Nerd Font, ~free, requires network)?" "n"
+		if [[ "$ans" == "y" ]]; then
+			install_nerd_font "JetBrainsMono"
+			probe_fonts
+		fi
+	fi
+
+	local -a labels=() values=()
+	local f
+	for f in "${FONT_FAMILIES[@]}"; do
+		labels+=("$f")
+		values+=("\"$f\"")
+	done
+
+	preview_family() {
+		local idx="$1"
+		printf '\n  Preview: %s\n' "${labels[$idx]}"
+		live_apply "font.normal.family" "${values[$idx]}"
+	}
+
+	local result
+	ask_choice result preview_family "${labels[@]}" -- "${values[@]}"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+
+	CFG[font.normal.family]="$result"
+	CFG[font.normal.style]='"Regular"'
+	CFG[font.bold.family]="$result"
+	CFG[font.bold.style]='"Bold"'
+	CFG[font.italic.family]="$result"
+	CFG[font.italic.style]='"Italic"'
+	CFG[font.bold_italic.family]="$result"
+	CFG[font.bold_italic.style]='"Bold Italic"'
+	return 0
+}
+
+step_font_size() {
+	ui_header "Step 2/17" "Font size"
+	ui_info "Use +/- (or j/k) to adjust, Enter to accept."
+
+	preview_size() {
+		live_apply "font.size" "${1}.0"
+	}
+
+	local current="${CFG[font.size]:-13.0}"
+	current="${current%.0}"
+
+	local result
+	ask_number result preview_size "Font size" 8 24 0.5 "$current"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+
+	case "$result" in
+	*.*) CFG[font.size]="$result" ;;
+	*) CFG[font.size]="${result}.0" ;;
+	esac
+	return 0
+}
+
+step_box_drawing() {
+	ui_header "Step 3/17" "Built-in box drawing"
+	ui_info "Alacritty can render box-drawing characters itself for crisper lines,"
+	ui_info "bypassing your font's own glyphs for that range."
+
+	local default="y"
+	[[ "$UNICODE_OK" == "n" ]] && default="y"
+
+	local ans
+	ask_yn ans "Enable built-in box drawing?" "$default"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+
+	CFG[font.builtin_box_drawing]="$([[ "$ans" == "y" ]] && echo true || echo false)"
+	return 0
+}
+
+step_theme() {
+	ui_header "Step 4/17" "Color theme"
+
+	local -a labels=("${THEME_LABELS[@]}")
+	local -a values=("${THEME_NAMES[@]}")
+	if [[ "$HAS_GIT" -eq 1 && "$HAS_NETWORK" -eq 1 ]]; then
+		labels+=("Browse upstream alacritty-theme collection (fetches from GitHub)")
+		values+=("__upstream__")
+	fi
+
+	preview_theme() {
+		local idx="$1"
+		[[ "${values[$idx]}" == "__upstream__" ]] && return 0
+		theme_preview "${values[$idx]}"
+	}
+
+	local result
+	ask_choice result preview_theme "${labels[@]}" -- "${values[@]}"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+
+	if [[ "$result" == "__upstream__" ]]; then
+		themes_fetch_upstream
+		themes_list_upstream || {
+			ui_error "Failed to fetch upstream themes; falling back to embedded set."
+			result="gruvbox_dark"
+		}
+		if [[ "${#UPSTREAM_THEME_FILES[@]}" -gt 0 ]]; then
+			local -a ulabels=() uvalues=()
+			local f base
+			for f in "${UPSTREAM_THEME_FILES[@]}"; do
+				base="$(basename "$f" .toml)"
+				ulabels+=("$base")
+				uvalues+=("$f")
+			done
+			upreview() { :; } # upstream files previewed via their own file, skip swatch
+			local upick
+			ask_choice upick upreview "${ulabels[@]}" -- "${uvalues[@]}"
+			rc=$?
+			[[ "$rc" -ne 0 ]] && return "$rc"
+			SELECTED_THEME_FILE="$(basename "$upick")"
+			SELECTED_THEME_TOML="$(cat "$upick")"
+			SELECTED_THEME=""
+			return 0
+		fi
+	fi
+
+	SELECTED_THEME="$result"
+	SELECTED_THEME_FILE="${result}.toml"
+	SELECTED_THEME_TOML="$(theme_toml "$result")"
+	return 0
+}
+
+step_bold_bright() {
+	ui_header "Step 5/17" "Bold text coloring"
+	local ans
+	ask_yn ans "Draw bold text using the bright color variants?" "y"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	CFG[colors.draw_bold_text_with_bright_colors]="$([[ "$ans" == "y" ]] && echo true || echo false)"
+	return 0
+}
+
+step_opacity() {
+	ui_header "Step 6/17" "Window opacity"
+	if [[ "$LIVE" -ne 1 ]]; then
+		ui_warn "Opacity cannot be shown in a static preview; choose by value."
+	fi
+
+	local -a labels=("Opaque (1.0)" "Slightly transparent (0.95)" "Transparent (0.90)" "More transparent (0.85)" "Very transparent (0.80)")
+	local -a values=("1.0" "0.95" "0.90" "0.85" "0.80")
+
+	preview_opacity() {
+		live_apply "window.opacity" "${values[$1]}"
+	}
+
+	local result
+	ask_choice result preview_opacity "${labels[@]}" -- "${values[@]}"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+
+	CFG[window.opacity]="$result"
+	if [[ "$result" != "1.0" ]]; then
+		CFG[colors.transparent_background_colors]="false"
+	fi
+	return 0
+}
+
+step_blur() {
+	if [[ "$IS_KDE_WAYLAND" -ne 1 && "$IS_MACOS" -ne 1 ]]; then
+		return 0 # not supported on this platform; skip silently
+	fi
+	ui_header "Step 7/17" "Background blur"
+	local ans
+	ask_yn ans "Enable background blur (KDE Wayland / macOS only)?" "n"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	CFG[window.blur]="$([[ "$ans" == "y" ]] && echo true || echo false)"
+	return 0
+}
+
+step_padding() {
+	ui_header "Step 8/17" "Window padding"
+
+	local -a labels=("None (0px)" "Small (4px)" "Medium (8px)" "Large (12px)")
+	local -a values=("0" "4" "8" "12")
+
+	preview_padding() {
+		live_apply "window.padding" "{ x = ${values[$1]}, y = ${values[$1]} }"
+	}
+
+	local result
+	ask_choice result preview_padding "${labels[@]}" -- "${values[@]}"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	CFG[window.padding.x]="$result"
+	CFG[window.padding.y]="$result"
+
+	local ans
+	ask_yn ans "Spread padding dynamically to fill uneven space?" "n"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	CFG[window.dynamic_padding]="$([[ "$ans" == "y" ]] && echo true || echo false)"
+	return 0
+}
+
+step_decorations() {
+	ui_header "Step 9/17" "Window decorations"
+
+	local -a labels=("Full (borders + title bar)" "None (borderless)" "Transparent title bar" "Buttonless title bar")
+	local -a values=('"Full"' '"None"' '"Transparent"' '"Buttonless"')
+
+	local result
+	ask_choice result - "${labels[@]}" -- "${values[@]}"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	CFG[window.decorations]="$result"
+
+	local -a vlabels=("System default" "Dark" "Light")
+	local -a vvalues=('"None"' '"Dark"' '"Light"')
+	local vresult
+	ask_choice vresult - "${vlabels[@]}" -- "${vvalues[@]}"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	CFG[window.decorations_theme_variant]="$vresult"
+	return 0
+}
+
+step_startup() {
+	ui_header "Step 10/17" "Startup mode"
+
+	local -a labels=("Windowed" "Maximized" "Fullscreen")
+	local -a values=('"Windowed"' '"Maximized"' '"Fullscreen"')
+
+	local result
+	ask_choice result - "${labels[@]}" -- "${values[@]}"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	CFG[window.startup_mode]="$result"
+	return 0
+}
+
+step_cursor() {
+	ui_header "Step 11/17" "Cursor style"
+
+	local -a labels=("Block" "Underline" "Beam (I-beam)")
+	local -a values=('"Block"' '"Underline"' '"Beam"')
+
+	preview_cursor() {
+		live_apply "cursor.style" "{ shape = ${values[$1]}, blinking = \"On\" }"
+	}
+
+	local result
+	ask_choice result preview_cursor "${labels[@]}" -- "${values[@]}"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	CFG[cursor.style.shape]="$result"
+
+	local ans
+	ask_yn ans "Should the cursor blink?" "n"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	CFG[cursor.style.blinking]="$([[ "$ans" == "y" ]] && echo '"On"' || echo '"Off"')"
+
+	ask_yn ans "Hollow out the cursor when the window is unfocused?" "y"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	CFG[cursor.unfocused_hollow]="$([[ "$ans" == "y" ]] && echo true || echo false)"
+
+	CFG[cursor.thickness]="0.15"
+	return 0
+}
+
+step_scrolling() {
+	ui_header "Step 12/17" "Scrollback history"
+
+	local -a labels=("10,000 lines" "50,000 lines" "100,000 lines" "Unlimited (0)")
+	local -a values=("10000" "50000" "100000" "0")
+
+	local result
+	ask_choice result - "${labels[@]}" -- "${values[@]}"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	CFG[scrolling.history]="$result"
+	CFG[scrolling.multiplier]="3"
+	return 0
+}
+
+step_shell() {
+	ui_header "Step 13/17" "Shell"
+
+	local -a labels=("Inherit \$SHELL (${SHELL:-/bin/sh})")
+	local -a values=("__inherit__")
+	local s
+	for s in "${SHELL_PATHS[@]}"; do
+		labels+=("$s")
+		values+=("$s")
+	done
+
+	local result
+	ask_choice result - "${labels[@]}" -- "${values[@]}"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+
+	if [[ "$result" == "__inherit__" ]]; then
+		# Omit terminal.shell entirely; Alacritty uses $SHELL by default.
+		unset 'CFG[terminal.shell.program]' 2>/dev/null || true
+		unset 'CFG[terminal.shell.args]' 2>/dev/null || true
+		return 0
+	fi
+
+	CFG[terminal.shell.program]="\"$result\""
+
+	local ans
+	ask_yn ans "Run $(basename "$result") as a login shell (-l)?" "n"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+
+	if [[ "$ans" == "y" ]]; then
+		CFG[terminal.shell.args]='["-l"]'
+	else
+		unset 'CFG[terminal.shell.args]' 2>/dev/null || true
+	fi
+	return 0
+}
+
+step_behavior() {
+	ui_header "Step 14/17" "Behavior"
+
+	local ans
+	ask_yn ans "Reload configuration live when the file changes?" "y"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	CFG[general.live_config_reload]="$([[ "$ans" == "y" ]] && echo true || echo false)"
+
+	ask_yn ans "Hide the mouse cursor while typing?" "y"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	CFG[mouse.hide_when_typing]="$([[ "$ans" == "y" ]] && echo true || echo false)"
+
+	ask_yn ans "Automatically copy selections to the clipboard?" "n"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	CFG[selection.save_to_clipboard]="$([[ "$ans" == "y" ]] && echo true || echo false)"
+	CFG[selection.semantic_escape_chars]='",│`|:\"'"'"' ()[]{}<>\t"'
+
+	ask_yn ans "Reflect the running program's title in the window title?" "y"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	CFG[window.dynamic_title]="$([[ "$ans" == "y" ]] && echo true || echo false)"
+	return 0
+}
+
+step_bell() {
+	ui_header "Step 15/17" "Terminal bell"
+
+	local -a labels=("Off (no flash)" "Visual flash" "Visual flash + colored")
+	local -a values=("off" "flash" "flash_colored")
+
+	local result
+	ask_choice result - "${labels[@]}" -- "${values[@]}"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+
+	case "$result" in
+	off)
+		CFG[bell.animation]='"Linear"'
+		CFG[bell.duration]="0"
+		;;
+	flash)
+		CFG[bell.animation]='"EaseOutExpo"'
+		CFG[bell.duration]="100"
+		CFG[bell.color]='"#ffffff"'
+		;;
+	flash_colored)
+		CFG[bell.animation]='"EaseOutExpo"'
+		CFG[bell.duration]="150"
+		if [[ -n "$SELECTED_THEME" ]]; then
+			theme_load_hex "$SELECTED_THEME"
+			CFG[bell.color]="\"${THX[yellow]}\""
+		else
+			CFG[bell.color]='"#f1fa8c"'
+		fi
+		;;
+	esac
+	return 0
+}
+
+step_keybindings() {
+	ui_header "Step 16/17" "Keybinding preset"
+
+	local -a labels=(
+		"Minimal (Alacritty defaults only)"
+		"Standard (copy/paste, zoom, search, fullscreen)"
+		"Standard + shell-friendly (adds word motion, word delete)"
+	)
+	local -a values=("minimal" "standard" "standard_shell")
+
+	local result
+	ask_choice result - "${labels[@]}" -- "${values[@]}"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	KEYBIND_PRESET="$result"
+	return 0
+}
+
+step_hints() {
+	ui_header "Step 17/17" "URL hints"
+
+	if [[ "$HAS_XDG_OPEN" -ne 1 && "$IS_MACOS" -ne 1 ]]; then
+		ui_warn "xdg-open was not found; hints will still be written but may not open URLs."
+	fi
+
+	local ans
+	ask_yn ans "Enable keyboard hints to open URLs (Ctrl+Shift+O)?" "y"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	HINTS_ENABLED="$ans"
+	return 0
+}
+
+# --- Nerd Font installer -----------------------------------------------------
+
+install_nerd_font() {
+	local name="$1"
+	if [[ "$HAS_NETWORK" -ne 1 ]]; then
+		ui_error "No network connectivity detected; skipping font download."
+		return 1
+	fi
+	local url="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/${name}.zip"
+	ui_info "Downloading $url ..."
+	local tmp
+	tmp="$(mktemp -d)"
+	if ! curl -fsSL "$url" -o "$tmp/${name}.zip"; then
+		ui_error "Download failed."
+		rm -rf "$tmp"
+		return 1
+	fi
+	mkdir -p "$HOME/.local/share/fonts"
+	unzip -oq "$tmp/${name}.zip" -d "$HOME/.local/share/fonts/${name}NerdFont"
+	rm -rf "$tmp"
+	fc-cache -f >/dev/null 2>&1
+	ui_success "Installed ${name} Nerd Font."
+}
+
+# --- review & write ----------------------------------------------------------
+
+review_and_write() {
+	ui_header "Review" "Confirm before writing"
+
+	printf '  Output directory:   %s\n' "$OUTPUT_DIR"
+	printf '  Font:                %s @ %s pt\n' "$(emit_cfg_get font.normal.family)" "${CFG[font.size]:-13.0}"
+	printf '  Theme:               %s\n' "${SELECTED_THEME:-${SELECTED_THEME_FILE:-none}}"
+	printf '  Opacity:             %s\n' "${CFG[window.opacity]:-1.0}"
+	printf '  Padding:             %sx%s\n' "${CFG[window.padding.x]:-0}" "${CFG[window.padding.y]:-0}"
+	printf '  Decorations:         %s\n' "${CFG[window.decorations]:-\"Full\"}"
+	printf '  Cursor:              %s (blink: %s)\n' "${CFG[cursor.style.shape]:-\"Block\"}" "${CFG[cursor.style.blinking]:-\"Off\"}"
+	printf '  Scrollback:          %s lines\n' "${CFG[scrolling.history]:-10000}"
+	printf '  Keybinding preset:   %s\n' "$KEYBIND_PRESET"
+	printf '  URL hints:           %s\n' "$HINTS_ENABLED"
+	printf '\n  Files to be written:\n'
+	printf '    %s/alacritty.toml\n' "$OUTPUT_DIR"
+	[[ -n "$SELECTED_THEME_FILE" ]] && printf '    %s/themes/%s\n' "$OUTPUT_DIR" "$SELECTED_THEME_FILE"
+	[[ "$KEYBIND_PRESET" != "minimal" ]] && printf '    %s/keybindings.toml\n' "$OUTPUT_DIR"
+	[[ "$HINTS_ENABLED" == "y" ]] && printf '    %s/hints.toml\n' "$OUTPUT_DIR"
+	printf '\n'
+
+	if [[ "$DRY_RUN" -eq 1 ]]; then
+		printf '\n--- alacritty.toml (dry-run, not written) ---\n\n'
+		IMPORT_PATHS=()
+		[[ -n "$SELECTED_THEME_FILE" ]] && IMPORT_PATHS+=("~/.config/alacritty/themes/$SELECTED_THEME_FILE")
+		[[ "$KEYBIND_PRESET" != "minimal" ]] && IMPORT_PATHS+=("~/.config/alacritty/keybindings.toml")
+		[[ "$HINTS_ENABLED" == "y" ]] && IMPORT_PATHS+=("~/.config/alacritty/hints.toml")
+		emit_general_toml
+		if [[ -n "$SELECTED_THEME_FILE" ]]; then
+			printf '\n--- themes/%s ---\n\n' "$SELECTED_THEME_FILE"
+			printf '%s\n' "$SELECTED_THEME_TOML"
+		fi
+		if [[ "$KEYBIND_PRESET" != "minimal" ]]; then
+			printf '\n--- keybindings.toml ---\n\n'
+			emit_keybindings_toml "$KEYBIND_PRESET"
+		fi
+		if [[ "$HINTS_ENABLED" == "y" ]]; then
+			printf '\n--- hints.toml ---\n\n'
+			emit_hints_toml
+		fi
+		return 0
+	fi
+
+	local ans
+	ask_yn ans "Write this configuration?" "y"
+	if [[ "$ans" != "y" ]]; then
+		ui_info "Aborted; nothing was written."
+		return 1
+	fi
+
+	local keybind_arg="$KEYBIND_PRESET"
+	if ! emit_all "$OUTPUT_DIR" "$SELECTED_THEME_TOML" "$SELECTED_THEME_FILE" "$keybind_arg" "$HINTS_ENABLED"; then
+		ui_error "Configuration was not applied due to validation failure."
+		return 1
+	fi
+
+	ui_success "Configuration written to $OUTPUT_DIR/alacritty.toml"
+	if [[ "${#BACKED_UP_FILES[@]}" -gt 0 ]]; then
+		ui_info "Backups created:"
+		local b
+		for b in "${BACKED_UP_FILES[@]}"; do
+			printf '    %s\n' "$b"
+		done
+	fi
+	live_reset
+	return 0
+}
+
+# --- main --------------------------------------------------------------------
+
+main() {
+	probe_alacritty
+	probe_env
+	probe_shells
+	[[ "$NO_PREVIEW" -eq 0 ]] && probe_live || LIVE=0
+	probe_existing_config
+	if [[ -n "$EXISTING_CONFIG_PATH" ]]; then
+		ui_warn "Existing configuration found at $EXISTING_CONFIG_PATH; it will be backed up before any overwrite."
+	fi
+	probe_unicode
+	probe_nerdfont
+	probe_fonts
+
+	ui_init
+
+	local -a steps=(
+		step_font_family step_font_size step_box_drawing step_theme step_bold_bright
+		step_opacity step_blur step_padding step_decorations step_startup
+		step_cursor step_scrolling step_shell step_behavior step_bell
+		step_keybindings step_hints
+	)
+	local idx=0
+	local n="${#steps[@]}"
+
+	while ((idx < n)); do
+		"${steps[$idx]}"
+		local rc=$?
+		case "$rc" in
+		0) idx=$((idx + 1)) ;;
+		2) idx=$((idx > 0 ? idx - 1 : 0)) ;;
+		3)
+			idx=0
+			CFG=()
+			SELECTED_THEME=""
+			SELECTED_THEME_TOML=""
+			SELECTED_THEME_FILE=""
+			KEYBIND_PRESET="minimal"
+			HINTS_ENABLED="n"
+			;;
+		4)
+			if ui_confirm_quit; then
+				ui_cleanup
+				exit 0
+			fi
+			;;
+		esac
+	done
+
+	review_and_write
+}
+
+main "$@"
