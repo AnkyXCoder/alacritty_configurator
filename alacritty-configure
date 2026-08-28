@@ -697,16 +697,32 @@ main() {
 	probe_shells
 	[[ "$NO_PREVIEW" -eq 0 ]] && probe_live || LIVE=0
 	probe_existing_config
+	local skip_preflight=0
 	if [[ -n "$EXISTING_CONFIG_PATH" ]]; then
 		ui_warn "Existing configuration found at $EXISTING_CONFIG_PATH; it will be backed up before any overwrite."
-		local ans=""
-		ask_yn ans "Load existing configuration? (n = start from scratch)" "y"
-		local rc=$?
-		[[ "$rc" -eq 4 ]] && exit 0
-		[[ "$ans" == "y" ]] && emit_load_config "$EXISTING_CONFIG_PATH"
+		local ans="" rc
+		while true; do
+			UI_FOOTER_NO_BACK=1
+			UI_FOOTER_NO_RESTART=1
+			ask_yn ans "Load existing configuration? (n = start from scratch)" "y"
+			rc=$?
+			UI_FOOTER_NO_BACK=""
+			UI_FOOTER_NO_RESTART=""
+			[[ "$rc" -eq 4 ]] && exit 0
+			[[ "$rc" -eq 0 ]] && break
+		done
+		if [[ "$ans" == "y" ]]; then
+			emit_load_config "$EXISTING_CONFIG_PATH"
+			skip_preflight=1
+		fi
 	fi
-	probe_unicode
-	probe_nerdfont
+	if [[ "$skip_preflight" -eq 1 ]]; then
+		UNICODE_OK="y"
+		NERDFONT_OK="n"
+	else
+		probe_unicode
+		probe_nerdfont
+	fi
 	probe_fonts
 
 	ui_init

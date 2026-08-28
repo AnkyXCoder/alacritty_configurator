@@ -13,8 +13,8 @@ UI_RECOMMENDED_INDEX=""
 # to keep the cursor on the last selected step.
 UI_START_INDEX=""
 
-# When set, ui_footer hides the [r] restart key (used inside re-config steps
-# where the main menu already provides navigation/restart).
+# When set, ui_footer hides the [b] back and/or [r] restart keys.
+UI_FOOTER_NO_BACK=""
 UI_FOOTER_NO_RESTART=""
 
 # --- low level terminal helpers ------------------------------------------
@@ -63,22 +63,24 @@ ui_header() {
 
 # ui_footer [n]
 # If <n> is given, shows the valid numeric quick-select range.
-# Always lists the navigation meta keys. [r] restart is hidden when
-# UI_FOOTER_NO_RESTART is set (e.g. when inside a re-config step).
+# Always lists the navigation meta keys. [b] back and [r] restart are hidden
+# when UI_FOOTER_NO_BACK / UI_FOOTER_NO_RESTART are set.
 ui_footer() {
 	local n="${1:-}"
+	local back="[b] back   "
 	local restart="[r] restart   "
+	[[ -n "$UI_FOOTER_NO_BACK" ]] && back=""
 	[[ -n "$UI_FOOTER_NO_RESTART" ]] && restart=""
 	printf '\n'
 	ui_rule
 	if [[ -n "$n" ]]; then
 		if ((n <= 9)); then
-			printf '[1-%s] select   [j/k or up/down] move   [Enter] confirm   [b] back   %s[q] quit\n' "$n" "$restart"
+			printf '[1-%s] select   [j/k or up/down] move   [Enter] confirm   %s%s[q] quit\n' "$n" "$back" "$restart"
 		else
-			printf '[1-9] quick-select   [j/k or up/down] move   [Enter] confirm   [b] back   %s[q] quit\n' "$restart"
+			printf '[1-9] quick-select   [j/k or up/down] move   [Enter] confirm   %s%s[q] quit\n' "$back" "$restart"
 		fi
 	else
-		printf '[b] back   %s[q] quit\n' "$restart"
+		printf '%s%s[q] quit\n' "$back" "$restart"
 	fi
 }
 
