@@ -668,13 +668,13 @@ STEP_FUNCS=(
 main_menu() {
 	ui_header "Main menu" "Select a section to configure"
 
-	local -a labels=("${STEP_LABELS[@]}" "Review & write configuration" "Quit")
+	local -a labels=("${STEP_LABELS[@]}" "Review & write configuration")
 	local -a values=()
 	local i
 	for ((i = 0; i < ${#STEP_LABELS[@]}; i++)); do
 		values+=("$i")
 	done
-	values+=("write" "quit")
+	values+=("write")
 
 	local result=""
 	ask_choice result - "${labels[@]}" -- "${values[@]}"
@@ -707,10 +707,14 @@ main() {
 		main_menu choice
 		local rc=$?
 
-		# Treat q/ESC from the main menu as a quit request.
+		# q/ESC from the main menu: ask to save and exit.
 		if [[ "$rc" -eq 4 ]]; then
-			choice="quit"
-			rc=0
+			if [[ "$dirty" -eq 1 ]]; then
+				local ans=""
+				ask_yn ans "You have unsaved changes. Save before exiting?" "y"
+				[[ "$ans" == "y" ]] && review_and_write
+			fi
+			exit 0
 		fi
 
 		# r = restart from main menu: reset everything and redraw.
@@ -728,14 +732,6 @@ main() {
 		case "$choice" in
 		write)
 			review_and_write
-			exit 0
-			;;
-		quit)
-			if [[ "$dirty" -eq 1 ]]; then
-				local ans=""
-				ask_yn ans "You have unsaved changes. Save before exiting?" "y"
-				[[ "$ans" == "y" ]] && review_and_write
-			fi
 			exit 0
 			;;
 		*)

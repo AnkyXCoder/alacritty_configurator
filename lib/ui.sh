@@ -138,11 +138,13 @@ ask_choice() {
 
 	local n="${#labels[@]}"
 	# Consume and clear the global recommendation index so it does not
-	# leak into later menus.
-	local rec="${UI_RECOMMENDED_INDEX:-0}"
+	# leak into later menus. Empty means "no recommendation".
+	local rec="${UI_RECOMMENDED_INDEX-}"
 	UI_RECOMMENDED_INDEX=""
-	[[ "$rec" -ge 0 && "$rec" -lt "$n" ]] 2>/dev/null || rec=0
-	local idx="$rec"
+	local idx=0
+	if [[ -n "$rec" ]] && ((rec >= 0 && rec < n)); then
+		idx="$rec"
+	fi
 	local key
 
 	# Save the cursor position at the top of the menu area so we can
