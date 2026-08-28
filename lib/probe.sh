@@ -115,6 +115,10 @@ probe_fonts() {
 		family="${family%%,*}"
 		[[ -z "$family" ]] && continue
 		[[ "$spacing" != *"spacing=100"* ]] && continue
+		# Skip Noto/CJK/emoji fonts: they are rarely desirable as terminal fonts.
+		if [[ "$family" == *"Noto"* || "$family" == *"CJK"* || "$family" == *"SignWriting"* ]]; then
+			continue
+		fi
 		if [[ "$family" == *"Nerd Font"* ]]; then
 			nerd+=("$family")
 		else

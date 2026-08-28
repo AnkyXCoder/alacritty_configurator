@@ -1,9 +1,13 @@
 #!/bin/bash
-# tools/alacritty/lib/ui.sh
+# lib/ui.sh
 #
 # Screen / prompt / menu primitives for the Alacritty configuration wizard.
 # All functions are careful to degrade gracefully when `tput` or a real TTY
 # are unavailable (e.g. when driven non-interactively for testing).
+
+# Optional global set by callers before ask_choice to mark a recommended
+# option (0-based index) and make it the initial highlight.
+UI_RECOMMENDED_INDEX=""
 
 # --- low level terminal helpers ------------------------------------------
 
@@ -49,10 +53,22 @@ ui_header() {
 	printf '%s\n\n' "$(ui_color bold)$title$(ui_color sgr0)"
 }
 
+# ui_footer [n]
+# If <n> is given, shows the valid numeric quick-select range.
+# Always lists the navigation meta keys.
 ui_footer() {
+	local n="${1:-}"
 	printf '\n'
 	ui_rule
-	printf '%s\n' "[1-9] select   [j/k or up/down] move   [Enter] confirm   [b] back   [r] restart   [q] quit"
+	if [[ -n "$n" ]]; then
+		if ((n <= 9)); then
+			printf '[1-%s] select   [j/k or up/down] move   [Enter] confirm   [b] back   [r] restart   [q] quit\n' "$n"
+		else
+			printf '[1-9] quick-select   [j/k or up/down] move   [Enter] confirm   [b] back   [r] restart   [q] quit\n'
+		fi
+	else
+		printf '[b] back   [r] restart   [q] quit\n'
+	fi
 }
 
 ui_info() {
@@ -121,17 +137,32 @@ ask_choice() {
 	local -a values=("$@")
 
 	local n="${#labels[@]}"
-	local idx=0
+	# Consume and clear the global recommendation index so it does not
+	# leak into later menus.
+	local rec="${UI_RECOMMENDED_INDEX:-0}"
+	UI_RECOMMENDED_INDEX=""
+	[[ "$rec" -ge 0 && "$rec" -lt "$n" ]] 2>/dev/null || rec=0
+	local idx="$rec"
 	local key
 
+	# Save the cursor position at the top of the menu area so we can
+	# restore and clear below it on every redraw, keeping arrow-key
+	# navigation crisp instead of scrolling the screen.
+	_ui_tput sc
+
 	while true; do
-		# Redraw menu in place: print, then move cursor back up.
+		# Restore to the saved menu top and clear everything below it.
+		_ui_tput rc
+		_ui_tput ed
+
 		local i
 		for i in "${!labels[@]}"; do
+			local label="${labels[$i]}"
+			[[ -n "$rec" && "$i" -eq "$rec" ]] && label="$label (recommended)"
 			if [[ "$i" -eq "$idx" ]]; then
-				printf '  %s> %2d) %s%s\n' "$(ui_color setaf 6)" "$((i + 1))" "${labels[$i]}" "$(ui_color sgr0)"
+				printf '  %s> %2d) %s%s\n' "$(ui_color setaf 6)" "$((i + 1))" "$label" "$(ui_color sgr0)"
 			else
-				printf '    %2d) %s\n' "$((i + 1))" "${labels[$i]}"
+				printf '    %2d) %s\n' "$((i + 1))" "$label"
 			fi
 		done
 
@@ -139,7 +170,7 @@ ask_choice() {
 			"$preview_fn" "$idx"
 		fi
 
-		ui_footer
+		ui_footer "$n"
 		ui_read_key key
 
 		case "$key" in
@@ -153,12 +184,13 @@ ask_choice() {
 			_result="${values[$idx]}"
 			return 0
 			;;
-		[1-9])
-			if ((key <= n)); then
+		[0-9])
+			if ((key >= 1 && key <= n)); then
 				idx=$((key - 1))
 				_result="${values[$idx]}"
 				return 0
 			fi
+			# Invalid digit falls through and just redraws.
 			;;
 		b)
 			return 2
@@ -170,10 +202,6 @@ ask_choice() {
 			return 4
 			;;
 		esac
-
-		# Move cursor back to the top of the menu block to redraw.
-		local lines=$((n + 2))
-		_ui_tput cuu "$lines"
 	done
 }
 
@@ -185,8 +213,15 @@ ask_yn() {
 	[[ "$default" == "y" ]] && suffix="[Y/n]"
 	[[ "$default" == "n" ]] && suffix="[y/N]"
 
+	local first=1
 	while true; do
-		printf '%s %s: ' "$prompt" "$suffix"
+		if [[ "$first" -eq 1 ]]; then
+			printf '%s %s: ' "$prompt" "$suffix"
+			first=0
+		else
+			printf '\r%s %s: ' "$prompt" "$suffix"
+		fi
+		ui_footer
 		local key
 		ui_read_key key
 		printf '\n'
@@ -206,6 +241,9 @@ ask_yn() {
 		b)
 			return 2
 			;;
+		r)
+			return 3
+			;;
 		q)
 			return 4
 			;;
@@ -219,12 +257,21 @@ ask_number() {
 	local -n _result="$1"
 	local preview_fn="$2" prompt="$3" min="$4" max="$5" step="$6" val="$7"
 
+	_ui_tput sc
+	local first=1
 	while true; do
-		printf '\r%s: %s%*s' "$prompt" "$val" 10 ''
+		_ui_tput rc
+		_ui_tput ed
+		printf '%s: %s%*s\n' "$prompt" "$val" 10 ''
+		if [[ "$first" -eq 1 ]]; then
+			first=0
+		fi
+
 		if [[ "$preview_fn" != "-" ]]; then
 			"$preview_fn" "$val"
 		fi
-		local key
+
+		ui_footer
 		ui_read_key key
 		case "$key" in
 		"+" | UP | k)
@@ -242,6 +289,10 @@ ask_number() {
 			printf '\n'
 			return 2
 			;;
+		r)
+			printf '\n'
+			return 3
+			;;
 		q)
 			printf '\n'
 			return 4
@@ -258,9 +309,12 @@ ui_pause() {
 	printf '\n'
 }
 
-# ui_confirm_quit -- returns 0 if user confirms quitting
+# ui_confirm_quit -- returns 0 if the user confirms quitting
 ui_confirm_quit() {
 	local ans
 	ask_yn ans "Quit without saving?" "n"
-	[[ "$ans" == "y" ]]
+	local rc=$?
+	# If the user pressed 'q' at the confirmation prompt, treat it as
+	# a firm quit request. Otherwise, only a 'y' confirms the quit.
+	[[ "$rc" -eq 4 || "$ans" == "y" ]]
 }

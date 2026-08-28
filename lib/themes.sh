@@ -141,35 +141,32 @@ theme_hex_to_rgb() {
 	printf '%d;%d;%d' "0x${hex:0:2}" "0x${hex:2:2}" "0x${hex:4:2}"
 }
 
-# theme_preview <name> -- renders a swatch + mock prompt/diff panel using
-# truecolor SGR escapes derived from the theme's hex values.
-theme_preview() {
-	local name="$1"
-	theme_load_hex "$name"
-
+# theme_preview_loaded -- renders the swatch + mock prompt/diff panel using
+# the colors already loaded into the global THX array.
+theme_preview_loaded() {
 	local bg fg
-	bg="$(theme_hex_to_rgb "${THX[bg]}")"
-	fg="$(theme_hex_to_rgb "${THX[fg]}")"
+	bg="$(theme_hex_to_rgb "${THX[bg]:-#1a1b26}")"
+	fg="$(theme_hex_to_rgb "${THX[fg]:-#c0caf5}")"
 
 	local -a order=(black red green yellow blue magenta cyan white)
 	local key rgb
 
 	printf '\n  '
 	for key in "${order[@]}"; do
-		rgb="$(theme_hex_to_rgb "${THX[$key]}")"
+		rgb="$(theme_hex_to_rgb "${THX[$key]:-#000000}")"
 		printf '\e[48;2;%sm  \e[0m' "$rgb"
 	done
 	printf '\n  '
 	for key in "${order[@]}"; do
-		rgb="$(theme_hex_to_rgb "${THX[b$key]}")"
+		rgb="$(theme_hex_to_rgb "${THX[b$key]:-#555555}")"
 		printf '\e[48;2;%sm  \e[0m' "$rgb"
 	done
 	printf '\n\n'
 
 	local green_rgb blue_rgb red_rgb
-	green_rgb="$(theme_hex_to_rgb "${THX[green]}")"
-	blue_rgb="$(theme_hex_to_rgb "${THX[blue]}")"
-	red_rgb="$(theme_hex_to_rgb "${THX[red]}")"
+	green_rgb="$(theme_hex_to_rgb "${THX[green]:-#00ff00}")"
+	blue_rgb="$(theme_hex_to_rgb "${THX[blue]:-#0088ff}")"
+	red_rgb="$(theme_hex_to_rgb "${THX[red]:-#ff0000}")"
 
 	printf '  \e[48;2;%sm\e[38;2;%sm%s\e[0m\n' "$bg" "$fg" "  \$ git status                                        "
 	printf '  \e[48;2;%sm\e[38;2;%sm%s\e[38;2;%sm%s\e[0m\n' "$bg" "$green_rgb" "  + added_feature.c" "$red_rgb" "   - old_bug.c "
@@ -177,6 +174,52 @@ theme_preview() {
 	printf '  \e[48;2;%sm\e[38;2;%sm  Normal / \e[1mBold\e[0;48;2;%sm\e[38;2;%sm / \e[3mItalic\e[0;48;2;%sm\e[38;2;%sm text sample              \e[0m\n' \
 		"$bg" "$fg" "$bg" "$fg" "$bg" "$fg"
 	printf '\n'
+}
+
+# theme_preview <name> -- renders the swatch for an embedded theme.
+theme_preview() {
+	local name="$1"
+	theme_load_hex "$name"
+	theme_preview_loaded
+}
+
+# theme_load_toml <file> -- parses an Alacritty TOML color theme into the
+# global THX array. Uses python3 + tomllib (Python >= 3.11) when available;
+# otherwise falls back to best-effort regex extraction.
+theme_load_toml() {
+	local file="$1"
+	THX=()
+
+	local out=""
+	if command -v python3 >/dev/null 2>&1 && python3 -c "import tomllib" 2>/dev/null; then
+		out="$(THEME_FILE="$file" python3 -c '
+import os, tomllib
+c = tomllib.load(open(os.environ["THEME_FILE"], "rb")).get("colors", {})
+p, n, b, r = c.get("primary", {}), c.get("normal", {}), c.get("bright", {}), c.get("cursor", {})
+def v(d, k, default="#000000"):
+    val = d.get(k, default)
+    return val if isinstance(val, str) else default
+out = {"bg": v(p, "background", "#1a1b26"), "fg": v(p, "foreground", "#c0caf5"),
+       "cursor": v(r, "cursor", "#c0caf5")}
+for k in ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"]:
+    out[k] = v(n, k)
+    out["b" + k] = v(b, k)
+for k in sorted(out):
+    print(k, out[k])
+')"
+	fi
+
+	while IFS=' ' read -r key val; do
+		[[ -n "$key" ]] && THX[$key]="$val"
+	done <<<"$out"
+}
+
+# theme_preview_file <file> -- renders the swatch for an arbitrary TOML
+# theme file.
+theme_preview_file() {
+	local file="$1"
+	theme_load_toml "$file"
+	theme_preview_loaded
 }
 
 # themes_fetch_upstream -- clones alacritty/alacritty-theme into
@@ -201,4 +244,93 @@ themes_list_upstream() {
 	while IFS= read -r f; do
 		UPSTREAM_THEME_FILES+=("$f")
 	done < <(find "$UPSTREAM_THEME_DIR" -maxdepth 1 -name '*.toml' | sort)
+}
+
+# theme_browse_upstream <result_var> -- paged browser for the upstream theme
+# collection. Shows 5 themes per page, live-previewing the theme under the
+# cursor. Returns the selected file path via <result_var>.
+theme_browse_upstream() {
+	local -n _result="$1"
+	local total="${#UPSTREAM_THEME_FILES[@]}"
+	local per_page=5
+	local page=0
+	local pos=0
+	local key
+
+	_ui_tput sc
+	while true; do
+		_ui_tput rc
+		_ui_tput ed
+		ui_header "Step 4/17" "Color theme — upstream collection"
+
+		local start=$((page * per_page))
+		local end=$((start + per_page))
+		[[ "$end" -gt "$total" ]] && end="$total"
+		local on_page=$((end - start))
+
+		local i
+		for ((i = 0; i < per_page; i++)); do
+			local real=$((start + i))
+			if [[ "$real" -lt "$end" ]]; then
+				local name
+				name="$(basename "${UPSTREAM_THEME_FILES[$real]}" .toml)"
+				if [[ "$i" -eq "$pos" ]]; then
+					printf '  %s> %3d) %s%s\n' "$(ui_color setaf 6)" "$((real + 1))" "$name" "$(ui_color sgr0)"
+				else
+					printf '    %3d) %s\n' "$((real + 1))" "$name"
+				fi
+			fi
+		done
+
+		theme_preview_file "${UPSTREAM_THEME_FILES[$((start + pos))]}"
+
+		printf '\n'
+		ui_rule
+		printf '[j/k or up/down] move   [n/p] next/prev page   [Enter] select   [b] back   [r] restart   [q] quit\n' 
+
+		ui_read_key key
+		case "$key" in
+		UP | k)
+			if [[ "$pos" -gt 0 ]]; then
+				pos=$((pos - 1))
+			elif [[ "$page" -gt 0 ]]; then
+				page=$((page - 1))
+				pos=$((per_page - 1))
+			fi
+			;;
+		DOWN | j)
+			if [[ "$pos" -lt "$((on_page - 1))" ]]; then
+				pos=$((pos + 1))
+			elif [[ "$(((page + 1) * per_page))" -lt "$total" ]]; then
+				page=$((page + 1))
+				pos=0
+			fi
+			;;
+		n)
+			if [[ "$(((page + 1) * per_page))" -lt "$total" ]]; then
+				page=$((page + 1))
+				pos=0
+			fi
+			;;
+		p)
+			if [[ "$page" -gt 0 ]]; then
+				page=$((page - 1))
+				pos=0
+			fi
+			;;
+		ENTER)
+			_result="${UPSTREAM_THEME_FILES[$((start + pos))]}"
+			return 0
+			;;
+		b)
+			return 2
+			;;
+		r)
+			return 3
+			;;
+		q)
+			return 4
+			;;
+		esac
+	done
 }

@@ -74,6 +74,7 @@ live_reset() {
 }
 
 on_exit() {
+	ui_clear
 	ui_cleanup
 	live_reset
 }
@@ -117,6 +118,7 @@ step_font_family() {
 	}
 
 	local result
+	UI_RECOMMENDED_INDEX=0
 	ask_choice result preview_family "${labels[@]}" -- "${values[@]}"
 	local rc=$?
 	[[ "$rc" -ne 0 ]] && return "$rc"
@@ -182,6 +184,9 @@ step_theme() {
 		values+=("__upstream__")
 	fi
 
+	# Recommend Tokyo Night (index 2) as a balanced dark theme for Alacritty.
+	UI_RECOMMENDED_INDEX=2
+
 	preview_theme() {
 		local idx="$1"
 		[[ "${values[$idx]}" == "__upstream__" ]] && return 0
@@ -200,16 +205,8 @@ step_theme() {
 			result="gruvbox_dark"
 		}
 		if [[ "${#UPSTREAM_THEME_FILES[@]}" -gt 0 ]]; then
-			local -a ulabels=() uvalues=()
-			local f base
-			for f in "${UPSTREAM_THEME_FILES[@]}"; do
-				base="$(basename "$f" .toml)"
-				ulabels+=("$base")
-				uvalues+=("$f")
-			done
-			upreview() { :; } # upstream files previewed via their own file, skip swatch
 			local upick
-			ask_choice upick upreview "${ulabels[@]}" -- "${uvalues[@]}"
+			theme_browse_upstream upick
 			rc=$?
 			[[ "$rc" -ne 0 ]] && return "$rc"
 			SELECTED_THEME_FILE="$(basename "$upick")"
@@ -249,6 +246,7 @@ step_opacity() {
 	}
 
 	local result
+	UI_RECOMMENDED_INDEX=0
 	ask_choice result preview_opacity "${labels[@]}" -- "${values[@]}"
 	local rc=$?
 	[[ "$rc" -ne 0 ]] && return "$rc"
@@ -284,6 +282,7 @@ step_padding() {
 	}
 
 	local result
+	UI_RECOMMENDED_INDEX=1
 	ask_choice result preview_padding "${labels[@]}" -- "${values[@]}"
 	local rc=$?
 	[[ "$rc" -ne 0 ]] && return "$rc"
@@ -305,6 +304,7 @@ step_decorations() {
 	local -a values=('"Full"' '"None"' '"Transparent"' '"Buttonless"')
 
 	local result
+	UI_RECOMMENDED_INDEX=0
 	ask_choice result - "${labels[@]}" -- "${values[@]}"
 	local rc=$?
 	[[ "$rc" -ne 0 ]] && return "$rc"
@@ -313,6 +313,7 @@ step_decorations() {
 	local -a vlabels=("System default" "Dark" "Light")
 	local -a vvalues=('"None"' '"Dark"' '"Light"')
 	local vresult
+	UI_RECOMMENDED_INDEX=0
 	ask_choice vresult - "${vlabels[@]}" -- "${vvalues[@]}"
 	rc=$?
 	[[ "$rc" -ne 0 ]] && return "$rc"
@@ -327,6 +328,7 @@ step_startup() {
 	local -a values=('"Windowed"' '"Maximized"' '"Fullscreen"')
 
 	local result
+	UI_RECOMMENDED_INDEX=0
 	ask_choice result - "${labels[@]}" -- "${values[@]}"
 	local rc=$?
 	[[ "$rc" -ne 0 ]] && return "$rc"
@@ -342,9 +344,17 @@ step_cursor() {
 
 	preview_cursor() {
 		live_apply "cursor.style" "{ shape = ${values[$1]}, blinking = \"On\" }"
+		printf '  user@host:~$ command'
+		case "$1" in
+		0) printf '█' ;;
+		1) printf '_' ;;
+		2) printf '|' ;;
+		esac
+		printf '\n'
 	}
 
 	local result
+	UI_RECOMMENDED_INDEX=0
 	ask_choice result preview_cursor "${labels[@]}" -- "${values[@]}"
 	local rc=$?
 	[[ "$rc" -ne 0 ]] && return "$rc"
@@ -372,6 +382,7 @@ step_scrolling() {
 	local -a values=("10000" "50000" "100000" "0")
 
 	local result
+	UI_RECOMMENDED_INDEX=0
 	ask_choice result - "${labels[@]}" -- "${values[@]}"
 	local rc=$?
 	[[ "$rc" -ne 0 ]] && return "$rc"
@@ -392,6 +403,7 @@ step_shell() {
 	done
 
 	local result
+	UI_RECOMMENDED_INDEX=0
 	ask_choice result - "${labels[@]}" -- "${values[@]}"
 	local rc=$?
 	[[ "$rc" -ne 0 ]] && return "$rc"
@@ -419,7 +431,7 @@ step_shell() {
 }
 
 step_behavior() {
-	ui_header "Step 14/17" "Behavior"
+	ui_header "Step 14/17" "Behavior: live reload, mouse, clipboard & title"
 
 	local ans
 	ask_yn ans "Reload configuration live when the file changes?" "y"
@@ -447,12 +459,29 @@ step_behavior() {
 
 step_bell() {
 	ui_header "Step 15/17" "Terminal bell"
+	ui_info "Choose how Alacritty signals a terminal bell (BEL/\a character)."
+	ui_info "Visual flash briefly inverts the screen; colored flash uses the bell color."
 
 	local -a labels=("Off (no flash)" "Visual flash" "Visual flash + colored")
 	local -a values=("off" "flash" "flash_colored")
 
+	preview_bell() {
+		case "${values[$1]}" in
+		off)
+			printf '  No bell effect\n'
+			;;
+		flash)
+			printf '  \e[48;2;255;255;255m\e[38;2;0;0;0m  [ Visual flash ]  \e[0m\n'
+			;;
+		flash_colored)
+			printf '  \e[48;2;241;250;140m\e[38;2;0;0;0m  [ Colored flash ]  \e[0m\n'
+			;;
+		esac
+	}
+
 	local result
-	ask_choice result - "${labels[@]}" -- "${values[@]}"
+	UI_RECOMMENDED_INDEX=1
+	ask_choice result preview_bell "${labels[@]}" -- "${values[@]}"
 	local rc=$?
 	[[ "$rc" -ne 0 ]] && return "$rc"
 
@@ -491,6 +520,7 @@ step_keybindings() {
 	local -a values=("minimal" "standard" "standard_shell")
 
 	local result
+	UI_RECOMMENDED_INDEX=1
 	ask_choice result - "${labels[@]}" -- "${values[@]}"
 	local rc=$?
 	[[ "$rc" -ne 0 ]] && return "$rc"
@@ -649,7 +679,6 @@ main() {
 			;;
 		4)
 			if ui_confirm_quit; then
-				ui_cleanup
 				exit 0
 			fi
 			;;
