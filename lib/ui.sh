@@ -9,6 +9,10 @@
 # option (0-based index) and make it the initial highlight.
 UI_RECOMMENDED_INDEX=""
 
+# When set, ui_footer hides the [r] restart key (used inside re-config steps
+# where the main menu already provides navigation/restart).
+UI_FOOTER_NO_RESTART=""
+
 # --- low level terminal helpers ------------------------------------------
 
 _ui_tput() {
@@ -55,19 +59,22 @@ ui_header() {
 
 # ui_footer [n]
 # If <n> is given, shows the valid numeric quick-select range.
-# Always lists the navigation meta keys.
+# Always lists the navigation meta keys. [r] restart is hidden when
+# UI_FOOTER_NO_RESTART is set (e.g. when inside a re-config step).
 ui_footer() {
 	local n="${1:-}"
+	local restart="[r] restart   "
+	[[ -n "$UI_FOOTER_NO_RESTART" ]] && restart=""
 	printf '\n'
 	ui_rule
 	if [[ -n "$n" ]]; then
 		if ((n <= 9)); then
-			printf '[1-%s] select   [j/k or up/down] move   [Enter] confirm   [b] back   [r] restart   [q] quit\n' "$n"
+			printf '[1-%s] select   [j/k or up/down] move   [Enter] confirm   [b] back   %s[q] quit\n' "$n" "$restart"
 		else
-			printf '[1-9] quick-select   [j/k or up/down] move   [Enter] confirm   [b] back   [r] restart   [q] quit\n'
+			printf '[1-9] quick-select   [j/k or up/down] move   [Enter] confirm   [b] back   %s[q] quit\n' "$restart"
 		fi
 	else
-		printf '[b] back   [r] restart   [q] quit\n'
+		printf '[b] back   %s[q] quit\n' "$restart"
 	fi
 }
 
