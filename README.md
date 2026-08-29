@@ -1,14 +1,19 @@
 # alacritty-configure
 
-A question-driven wizard for configuring [Alacritty](https://alacritty.org/).
+A question-driven wizard for configuring [Alacritty](https://alacritty.org/),
+zsh, and [Powerlevel10k](https://github.com/romkatv/powerlevel10k).
 Answer a series of single-keystroke questions — font, theme, opacity, cursor,
 keybindings, and more — and get a clean, split `~/.config/alacritty/` config
-tree written out for you.
+tree written out for you. Use `--install` to also install Alacritty, zsh,
+Oh My Zsh, Powerlevel10k, and a Nerd Font in one go.
 
 ## Usage
 
 ```sh
-./tools/alacritty/alacritty-configure
+./alacritty-configure
+
+# First-time full setup (installs packages, Oh My Zsh, p10k, and a Nerd Font)
+./alacritty-configure --install
 ```
 
 - **Arrow keys / j/k** move the highlight in a menu, live-previewing each option.
@@ -33,13 +38,14 @@ the final look.
 
 ## Flags
 
-| Flag               | Effect                                                                  |
-| ------------------ | ----------------------------------------------------------------------- |
-| `--dry-run`        | Print the resulting configuration to stdout; write nothing.             |
-| `--output-dir DIR` | Write the config tree to `DIR` instead of `$XDG_CONFIG_HOME/alacritty`. |
-| `--no-preview`     | Disable live/mock previews.                                             |
-| `--load-existing`  | (best-effort) Seed defaults from your existing config, if one is found. |
-| `-h`, `--help`     | Show usage.                                                             |
+| Flag               | Effect                                                                          |
+| ------------------ | ------------------------------------------------------------------------------- |
+| `--install`        | Run the installer first (packages, Oh My Zsh, p10k, Nerd Font), then configure. |
+| `--dry-run`        | Print the resulting configuration to stdout; write nothing.                     |
+| `--output-dir DIR` | Write the config tree to `DIR` instead of `$XDG_CONFIG_HOME/alacritty`.         |
+| `--no-preview`     | Disable live/mock previews.                                                     |
+| `--load-existing`  | (best-effort) Seed defaults from your existing config, if one is found.         |
+| `-h`, `--help`     | Show usage.                                                                     |
 
 ## What gets written
 
@@ -49,6 +55,10 @@ the final look.
 ├── keybindings.toml       # only written if you pick a non-minimal preset
 ├── hints.toml             # only written if URL hints are enabled
 └── themes/<name>.toml     # your chosen color theme
+
+~/.p10k.zsh               # written when the Powerlevel10k step is configured
+~/.zshrc                  # updated to use the powerlevel10k/p10k theme
+~/.local/share/fonts/     # Nerd Font and optional Font Awesome files
 ```
 
 Any file that would be overwritten is first copied to
@@ -70,6 +80,13 @@ one (JetBrainsMono Nerd Font) into `~/.local/share/fonts` — this requires
 network access and is entirely optional; icon/powerline glyphs simply won't
 render as symbols without one.
 
+Powerlevel10k terminal icons come from a **Nerd Font**, not from the original
+[Font Awesome](https://github.com/FortAwesome/Font-Awesome) fonts directly.
+Nerd Fonts are standard monospace coding fonts patched with icon sets that
+include Font Awesome, Material, Devicons, and more. The `--install` flow can
+also install the original Font Awesome desktop font files, but those are
+intended for non-terminal apps, not as an Alacritty font.
+
 ## Themes
 
 Eight themes are embedded and work fully offline: Gruvbox Dark, Catppuccin
@@ -81,14 +98,17 @@ collection, which gets cloned into `~/.config/alacritty/themes-upstream`.
 ## Layout
 
 ```
-tools/alacritty/
+.
 ├── alacritty-configure   # entry point / question flow
 ├── lib/ui.sh              # menu, prompt, and key-reading primitives
 ├── lib/probe.sh           # environment/capability detection
+├── lib/fonts.sh           # Nerd Font and Font Awesome install helpers
+├── lib/install.sh         # package / Oh My Zsh / Powerlevel10k installer
+├── lib/p10k.sh            # Powerlevel10k template and ~/.p10k.zsh writer
 ├── lib/themes.sh          # embedded themes + upstream fetch/preview
 └── lib/emit.sh            # TOML serialization, backup, validation
 ```
 
 Each file is plain Bash with no dependencies beyond `alacritty` itself
 (`git`, `curl`, and `unzip` are only needed for the optional theme-browsing
-and font-download features).
+and font-download features, plus the `--install` flow).

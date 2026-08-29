@@ -12,12 +12,19 @@ source "$SCRIPT_DIR/lib/ui.sh"
 source "$SCRIPT_DIR/lib/probe.sh"
 # shellcheck source=lib/themes.sh
 source "$SCRIPT_DIR/lib/themes.sh"
+# shellcheck source=lib/fonts.sh
+source "$SCRIPT_DIR/lib/fonts.sh"
+# shellcheck source=lib/install.sh
+source "$SCRIPT_DIR/lib/install.sh"
+# shellcheck source=lib/p10k.sh
+source "$SCRIPT_DIR/lib/p10k.sh"
 # shellcheck source=lib/emit.sh
 source "$SCRIPT_DIR/lib/emit.sh"
 
 # --- flags -----------------------------------------------------------------
 
 DRY_RUN=0
+INSTALL_MODE=0
 NO_PREVIEW=0
 LOAD_EXISTING=0
 OUTPUT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/alacritty"
@@ -26,10 +33,12 @@ print_help() {
 	cat <<EOF
 Usage: alacritty-configure [OPTIONS]
 
-Interactively configure Alacritty, with live in-window previews when run
-inside Alacritty itself.
+Interactively configure Alacritty, zsh, and Powerlevel10k, with live in-window
+previews when run inside Alacritty itself.
 
 Options:
+  --install            Run the installer first (Alacritty, zsh, Oh My Zsh,
+                       Powerlevel10k, and a Nerd Font), then configure.
   --dry-run            Print the resulting configuration to stdout; write nothing.
   --output-dir DIR      Write the config tree to DIR instead of \$XDG_CONFIG_HOME/alacritty.
   --no-preview          Disable live/mock previews (faster, non-interactive-friendly).
@@ -40,6 +49,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
+	--install) INSTALL_MODE=1 ;;
 	--dry-run) DRY_RUN=1 ;;
 	--output-dir)
 		OUTPUT_DIR="$2"
@@ -94,44 +104,68 @@ HINTS_ENABLED="n"
 step_font_family() {
 	ui_header "Step 1/17" "Font family"
 
-	if [[ "${#FONT_FAMILIES[@]}" -le 1 && "$NERDFONT_OK" != "y" ]]; then
-		ui_warn "No Nerd Fonts are installed, so icon/powerline glyphs in prompts will not render."
-		local ans
-		ask_yn ans "Download a Nerd Font now (JetBrainsMono Nerd Font, ~free, requires network)?" "n"
-		if [[ "$ans" == "y" ]]; then
+	while true; do
+		if [[ "${#FONT_FAMILIES[@]}" -le 1 && "$NERDFONT_OK" != "y" ]]; then
+			ui_warn "No Nerd Fonts are installed, so icon/powerline glyphs in prompts will not render."
+			local ans
+			ask_yn ans "Download a Nerd Font now (JetBrainsMono Nerd Font, ~free, requires network)?" "n"
+			if [[ "$ans" == "y" ]]; then
+				install_nerd_font "JetBrainsMono"
+				probe_fonts
+			fi
+		fi
+
+		local -a labels=() values=()
+		local f
+		for f in "${FONT_FAMILIES[@]}"; do
+			local label="$f"
+			is_nerd_font "$f" && label="${label} [Nerd]"
+			if [[ -n "$NEWLY_INSTALLED_FONT" && "$f" == "$NEWLY_INSTALLED_FONT" ]]; then
+				label="${label} [NEW]"
+			fi
+			labels+=("$label")
+			values+=("\"$f\"")
+		done
+		labels+=("Download another Nerd Font...")
+		values+=("__download__")
+
+		local recommended=0
+		if [[ -n "$NEWLY_INSTALLED_FONT" ]]; then
+			local i
+			for i in "${!values[@]}"; do
+				[[ "${values[$i]}" == "\"$NEWLY_INSTALLED_FONT\"" ]] && recommended="$i" && break
+			done
+		fi
+
+		preview_family() {
+			local idx="$1"
+			[[ "${values[$idx]}" == "__download__" ]] && return 0
+			printf '\n  Preview: %s\n' "${labels[$idx]}"
+			live_apply "font.normal.family" "${values[$idx]}"
+		}
+
+		local result=""
+		UI_RECOMMENDED_INDEX="$recommended"
+		ask_choice result preview_family "${labels[@]}" -- "${values[@]}"
+		local rc=$?
+		[[ "$rc" -ne 0 ]] && return "$rc"
+
+		if [[ "$result" == "__download__" ]]; then
 			install_nerd_font "JetBrainsMono"
 			probe_fonts
+			continue
 		fi
-	fi
 
-	local -a labels=() values=()
-	local f
-	for f in "${FONT_FAMILIES[@]}"; do
-		labels+=("$f")
-		values+=("\"$f\"")
+		CFG[font.normal.family]="$result"
+		CFG[font.normal.style]='"Regular"'
+		CFG[font.bold.family]="$result"
+		CFG[font.bold.style]='"Bold"'
+		CFG[font.italic.family]="$result"
+		CFG[font.italic.style]='"Italic"'
+		CFG[font.bold_italic.family]="$result"
+		CFG[font.bold_italic.style]='"Bold Italic"'
+		return 0
 	done
-
-	preview_family() {
-		local idx="$1"
-		printf '\n  Preview: %s\n' "${labels[$idx]}"
-		live_apply "font.normal.family" "${values[$idx]}"
-	}
-
-	local result=""
-	UI_RECOMMENDED_INDEX=0
-	ask_choice result preview_family "${labels[@]}" -- "${values[@]}"
-	local rc=$?
-	[[ "$rc" -ne 0 ]] && return "$rc"
-
-	CFG[font.normal.family]="$result"
-	CFG[font.normal.style]='"Regular"'
-	CFG[font.bold.family]="$result"
-	CFG[font.bold.style]='"Bold"'
-	CFG[font.italic.family]="$result"
-	CFG[font.italic.style]='"Italic"'
-	CFG[font.bold_italic.family]="$result"
-	CFG[font.bold_italic.style]='"Bold Italic"'
-	return 0
 }
 
 step_font_size() {
@@ -543,28 +577,77 @@ step_hints() {
 	return 0
 }
 
-# --- Nerd Font installer -----------------------------------------------------
+step_p10k() {
+	ui_header "Powerlevel10k" "Configure zsh prompt"
 
-install_nerd_font() {
-	local name="$1"
-	if [[ "$HAS_NETWORK" -ne 1 ]]; then
-		ui_error "No network connectivity detected; skipping font download."
-		return 1
+	if [[ ! -d "$P10K_DIR" ]]; then
+		ui_warn "Powerlevel10k is not installed. Run with --install to set it up."
+		return 0
 	fi
-	local url="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/${name}.zip"
-	ui_info "Downloading $url ..."
-	local tmp
-	tmp="$(mktemp -d)"
-	if ! curl -fsSL "$url" -o "$tmp/${name}.zip"; then
-		ui_error "Download failed."
-		rm -rf "$tmp"
-		return 1
+
+	local ans
+	ask_yn ans "Configure the Powerlevel10k prompt?" "y"
+	local rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	[[ "$ans" != "y" ]] && return 0
+
+	local icons_default="n"
+	[[ "${NERDFONT_INSTALLED_COUNT:-0}" -gt 0 ]] && icons_default="y"
+
+	local icons
+	ask_yn icons "Use Nerd Font / Font Awesome icons in the prompt?" "$icons_default"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+
+	if [[ "$icons" == "y" && "${NERDFONT_INSTALLED_COUNT:-0}" -eq 0 ]]; then
+		ui_warn "No Nerd Font is installed. Icons require a Nerd Font."
+		local dl
+		ask_yn dl "Download and install JetBrainsMono Nerd Font now?" "y"
+		rc=$?
+		[[ "$rc" -ne 0 ]] && return "$rc"
+		if [[ "$dl" == "y" ]]; then
+			install_nerd_font "JetBrainsMono"
+			probe_fonts
+		fi
+		if [[ "${NERDFONT_INSTALLED_COUNT:-0}" -eq 0 ]]; then
+			ui_warn "Still no Nerd Font detected; using powerline mode."
+			icons="n"
+		fi
 	fi
-	mkdir -p "$HOME/.local/share/fonts"
-	unzip -oq "$tmp/${name}.zip" -d "$HOME/.local/share/fonts/${name}NerdFont"
-	rm -rf "$tmp"
-	fc-cache -f >/dev/null 2>&1
-	ui_success "Installed ${name} Nerd Font."
+
+	if [[ "$icons" == "y" ]]; then
+		local current_font="${CFG[font.normal.family]:-}"
+		current_font="${current_font#\"}"
+		current_font="${current_font%\"}"
+		if [[ -n "$NEWLY_INSTALLED_FONT" ]] && ! is_nerd_font "$current_font"; then
+			local switch
+			ask_yn switch "Switch Alacritty font to the new Nerd Font (${NEWLY_INSTALLED_FONT}) for icons?" "y"
+			rc=$?
+			[[ "$rc" -ne 0 ]] && return "$rc"
+			if [[ "$switch" == "y" ]]; then
+				local q="\"$NEWLY_INSTALLED_FONT\""
+				CFG[font.normal.family]="$q"
+				CFG[font.bold.family]="$q"
+				CFG[font.italic.family]="$q"
+				CFG[font.bold_italic.family]="$q"
+			fi
+		fi
+	fi
+
+	local mode="powerline"
+	[[ "$icons" == "y" ]] && mode="nerdfont-v3"
+
+	local os_icon
+	ask_yn os_icon "Show an OS icon at the start of the prompt?" "n"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+
+	local prompt_char
+	ask_yn prompt_char "Show the prompt symbol (prompt_char)?" "y"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+
+	write_p10k_config "$mode" "$os_icon" "$prompt_char"
 }
 
 # --- review & write ----------------------------------------------------------
@@ -660,13 +743,14 @@ STEP_LABELS=(
 	"Terminal bell"
 	"Keybindings"
 	"Hints (URL open)"
+	"Powerlevel10k"
 )
 
 STEP_FUNCS=(
 	step_font_family step_font_size step_box_drawing step_theme step_bold_bright
 	step_opacity step_padding step_decorations step_startup
 	step_cursor step_scrolling step_shell step_behavior step_bell
-	step_keybindings step_hints
+	step_keybindings step_hints step_p10k
 )
 
 # main_menu <result_var> -- interactive re-config menu. Shows the current
@@ -684,20 +768,20 @@ main_menu() {
 		label="${STEP_LABELS[$i]}"
 		value=""
 		case "$i" in
-		0)  value="${CFG[font.normal.family]:-}" ;;
-		1)  value="${CFG[font.size]:-}" ;;
-		2)  value="${CFG[font.builtin_box_drawing]:-}" ;;
-		3)  value="${SELECTED_THEME:-}" ;;
-		4)  value="${CFG[colors.draw_bold_text_with_bright_colors]:-}" ;;
-		5)  value="${CFG[window.opacity]:-}" ;;
+		0) value="${CFG[font.normal.family]:-}" ;;
+		1) value="${CFG[font.size]:-}" ;;
+		2) value="${CFG[font.builtin_box_drawing]:-}" ;;
+		3) value="${SELECTED_THEME:-}" ;;
+		4) value="${CFG[colors.draw_bold_text_with_bright_colors]:-}" ;;
+		5) value="${CFG[window.opacity]:-}" ;;
 		6)
 			if emit_has window.padding.x; then
 				value="$(emit_cfg_get window.padding.x "")x$(emit_cfg_get window.padding.y "")"
 			fi
 			;;
-		7)  value="${CFG[window.decorations]:-}" ;;
-		8)  value="${CFG[window.startup_mode]:-}" ;;
-		9)  value="${CFG[cursor.style.shape]:-}" ;;
+		7) value="${CFG[window.decorations]:-}" ;;
+		8) value="${CFG[window.startup_mode]:-}" ;;
+		9) value="${CFG[cursor.style.shape]:-}" ;;
 		10) value="${CFG[scrolling.history]:-}" ;;
 		11) value="${CFG[terminal.shell.program]:-}" ;;
 		13) value="${CFG[bell.animation]:-}" ;;
@@ -802,9 +886,53 @@ reconfig_menu() {
 	done
 }
 
+install_phase() {
+	ui_header "Installer" "Set up Alacritty, zsh, Oh My Zsh, and Powerlevel10k"
+
+	local ans rc
+
+	ask_yn ans "Install base packages (alacritty, zsh, git, curl, unzip, fontconfig)?" "y"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	[[ "$ans" == "y" ]] && install_packages
+
+	ask_yn ans "Install Oh My Zsh?" "y"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	[[ "$ans" == "y" ]] && install_ohmyzsh
+
+	ask_yn ans "Install the Powerlevel10k theme?" "y"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	[[ "$ans" == "y" ]] && install_powerlevel10k
+
+	ask_yn ans "Install the JetBrainsMono Nerd Font (needed for icons)?" "y"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	[[ "$ans" == "y" ]] && install_nerd_font "JetBrainsMono"
+
+	ask_yn ans "Also install the original Font Awesome desktop font files?" "n"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	[[ "$ans" == "y" ]] && install_font_awesome
+
+	ask_yn ans "Make zsh the default login shell?" "n"
+	rc=$?
+	[[ "$rc" -ne 0 ]] && return "$rc"
+	if [[ "$ans" == "y" ]]; then
+		set_zsh_default
+	fi
+
+	p10k_setup_zshrc
+	ui_success "Installer phase complete."
+}
+
 main() {
-	probe_alacritty
 	probe_env
+	if [[ "$INSTALL_MODE" -eq 1 ]]; then
+		install_phase
+	fi
+	probe_alacritty
 	probe_shells
 	[[ "$NO_PREVIEW" -eq 0 ]] && probe_live || LIVE=0
 	probe_existing_config

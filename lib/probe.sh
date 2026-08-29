@@ -145,6 +145,7 @@ probe_fonts() {
 	done
 
 	FONT_FAMILIES=("${nerd_u[@]}" "${mono_u[@]}")
+	NERDFONT_INSTALLED_COUNT="${#nerd_u[@]}"
 	if [[ "${#FONT_FAMILIES[@]}" -eq 0 ]]; then
 		FONT_FAMILIES=("monospace")
 	fi
