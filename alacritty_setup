@@ -1,8 +1,8 @@
 #!/bin/bash
-# tools/alacritty/alacritty-configure
+# alacritty_setup
 #
 # A p10k-style, question-driven wizard to configure Alacritty. See
-# tools/alacritty/README.md for usage.
+# README.md for usage.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,7 +31,7 @@ OUTPUT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/alacritty"
 
 print_help() {
 	cat <<EOF
-Usage: alacritty-configure [OPTIONS]
+Usage: alacritty_setup [OPTIONS]
 
 Interactively configure Alacritty, zsh, and Powerlevel10k, with live in-window
 previews when run inside Alacritty itself.

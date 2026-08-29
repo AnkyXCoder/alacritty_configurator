@@ -1,5 +1,5 @@
 #!/bin/bash
-# tools/alacritty/lib/probe.sh
+# lib/probe.sh
 #
 # Environment / capability detection for the wizard: Alacritty version,
 # live-preview availability, existing config, Nerd Font / unicode support,

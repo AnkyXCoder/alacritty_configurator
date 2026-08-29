@@ -1,4 +1,4 @@
-# alacritty-configure
+# alacritty_setup
 
 A question-driven wizard for configuring [Alacritty](https://alacritty.org/),
 zsh, and [Powerlevel10k](https://github.com/romkatv/powerlevel10k).
@@ -10,11 +10,25 @@ Oh My Zsh, Powerlevel10k, and a Nerd Font in one go.
 ## Usage
 
 ```sh
-./alacritty-configure
+./alacritty_setup
 
 # First-time full setup (installs packages, Oh My Zsh, p10k, and a Nerd Font)
-./alacritty-configure --install
+./alacritty_setup --install
 ```
+
+### Desktop shortcut (e.g. Ctrl+Alt+T)
+
+In GNOME / Ubuntu, bind `Ctrl + Alt + T` to Alacritty:
+
+```bash
+gsettings set org.gnome.settings-daemon.plugins.media-keys terminal "[]"
+gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/']"
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/ name "Alacritty"
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/ command "/usr/bin/alacritty"
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/ binding "<Control><Alt>T"
+```
+
+Alternatively, open **Settings → Keyboard → View and Customize Shortcuts**, remove the existing **Launch Terminal** binding, then add a custom shortcut named `Alacritty` with command `/usr/bin/alacritty` and shortcut `Ctrl + Alt + T`.
 
 - **Arrow keys / j/k** move the highlight in a menu, live-previewing each option.
 - **Number keys** jump straight to that option.
@@ -99,7 +113,7 @@ collection, which gets cloned into `~/.config/alacritty/themes-upstream`.
 
 ```
 .
-├── alacritty-configure   # entry point / question flow
+├── alacritty_setup   # entry point / question flow
 ├── lib/ui.sh              # menu, prompt, and key-reading primitives
 ├── lib/probe.sh           # environment/capability detection
 ├── lib/fonts.sh           # Nerd Font and Font Awesome install helpers
